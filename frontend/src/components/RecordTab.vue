@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { api } from '../api.js'
 
 const props = defineProps({ players: { type: Array, default: () => [] } })
@@ -9,6 +9,7 @@ const newPlayerName = ref('')
 const selectedPlayerIds = ref([])
 const scores = ref({}) // { playerId: score }
 const note = ref('')
+const playedAt = ref(new Date())
 const submitting = ref(false)
 
 const totalSum = computed(() => {
@@ -18,15 +19,12 @@ const totalSum = computed(() => {
   }, 0)
 })
 
-function togglePlayer(id) {
-  const idx = selectedPlayerIds.value.indexOf(id)
-  if (idx >= 0) {
-    selectedPlayerIds.value.splice(idx, 1)
-    delete scores.value[id]
-  } else {
-    selectedPlayerIds.value.push(id)
+watch(selectedPlayerIds, (ids) => {
+  const idSet = new Set(ids.map(Number))
+  for (const k of Object.keys(scores.value)) {
+    if (!idSet.has(Number(k))) delete scores.value[k]
   }
-}
+}, { deep: true })
 
 async function addPlayer() {
   const name = newPlayerName.value.trim()
@@ -35,25 +33,22 @@ async function addPlayer() {
     await api.createPlayer(name)
     newPlayerName.value = ''
     emit('refresh-players')
-    emit('toast', '玩家已添加')
+    emit('toast', '玩家已添加', 'success')
   } catch (e) {
-    emit('toast', e.message)
+    emit('toast', e.message, 'error')
   }
 }
 
 async function removePlayer(player) {
   try {
     await api.deletePlayer(player.id)
-    // 如果该玩家已被选中，移除
     const idx = selectedPlayerIds.value.indexOf(player.id)
-    if (idx >= 0) {
-      selectedPlayerIds.value.splice(idx, 1)
-      delete scores.value[player.id]
-    }
+    if (idx >= 0) selectedPlayerIds.value.splice(idx, 1)
+    delete scores.value[player.id]
     emit('refresh-players')
-    emit('toast', '玩家已删除')
+    emit('toast', '玩家已删除', 'success')
   } catch (e) {
-    emit('toast', e.message)
+    emit('toast', e.message, 'error')
   }
 }
 
@@ -61,7 +56,12 @@ async function submitGame() {
   if (submitting.value) return
 
   if (selectedPlayerIds.value.length < 2) {
-    emit('toast', '至少需要选择2名玩家')
+    emit('toast', '至少需要选择2名玩家', 'warning')
+    return
+  }
+
+  if (selectedPlayerIds.value.length > 4) {
+    emit('toast', '每局最多只能选择4名玩家', 'warning')
     return
   }
 
@@ -76,17 +76,18 @@ async function submitGame() {
     })
 
     await api.createGame({
-      playedAt: new Date().toISOString(),
+      playedAt: playedAt.value ? new Date(playedAt.value).toISOString() : new Date().toISOString(),
       note: note.value.trim() || null,
       players,
     })
     selectedPlayerIds.value = []
     scores.value = {}
     note.value = ''
+    playedAt.value = new Date()
     emit('game-created')
-    emit('toast', '对局已记录')
+    emit('toast', '对局已记录', 'success')
   } catch (e) {
-    emit('toast', e.message)
+    emit('toast', e.message, 'error')
   } finally {
     submitting.value = false
   }
@@ -95,45 +96,45 @@ async function submitGame() {
 
 <template>
   <div>
-    <div class="card">
-      <h2>玩家管理</h2>
+    <el-card class="block-card">
+      <template #header>玩家管理</template>
       <div class="add-player-row">
-        <input
+        <el-input
           v-model="newPlayerName"
-          type="text"
           placeholder="输入玩家名字，回车添加"
-          @keydown.enter="addPlayer"
-        >
-        <button class="btn btn-primary" @click="addPlayer">+ 添加</button>
+          @keyup.enter="addPlayer"
+        />
+        <el-button type="primary" @click="addPlayer">+ 添加</el-button>
       </div>
-      <div class="player-chips">
-        <span v-if="players.length === 0" class="dim">还没有玩家，先添加几个吧</span>
-        <span v-for="p in players" :key="p.id" class="player-chip">
-          {{ p.name }}
-          <span class="remove" @click="removePlayer(p)">&times;</span>
-        </span>
+      <div v-if="players.length === 0" class="dim">还没有玩家，先添加几个吧</div>
+      <div v-else class="player-chips">
+        <el-tag
+          v-for="p in players"
+          :key="p.id"
+          closable
+          type="info"
+          effect="dark"
+          @close="removePlayer(p)"
+        >{{ p.name }}</el-tag>
       </div>
-    </div>
+    </el-card>
 
-    <div class="card">
-      <h2>新建对局</h2>
+    <el-card class="block-card">
+      <template #header>新建对局</template>
       <p v-if="players.length === 0" class="dim">请先在上方添加玩家</p>
+
       <template v-else>
         <p class="select-label">选择参与本局对局的玩家：</p>
-        <div class="player-select">
-          <span
-            v-for="p in players"
-            :key="p.id"
-            class="player-option"
-            :class="{ selected: selectedPlayerIds.includes(p.id) }"
-            @click="togglePlayer(p.id)"
-          >{{ p.name }}</span>
-        </div>
+        <el-checkbox-group v-model="selectedPlayerIds" class="player-select" :max="4">
+          <el-checkbox-button v-for="p in players" :key="p.id" :value="p.id">
+            {{ p.name }}
+          </el-checkbox-button>
+        </el-checkbox-group>
 
         <div v-if="selectedPlayerIds.length > 0" class="score-area">
           <div v-for="id in selectedPlayerIds" :key="id" class="score-row">
             <label>{{ players.find(p => p.id === id)?.name }}</label>
-            <input v-model.number="scores[id]" type="number" placeholder="0" step="any">
+            <el-input-number v-model="scores[id]" :controls="false" :step="1" placeholder="0" />
             <span>分</span>
           </div>
           <div class="score-sum" :class="totalSum === 0 ? 'zero' : 'non-zero'">
@@ -141,53 +142,38 @@ async function submitGame() {
           </div>
         </div>
 
-        <div class="note-row">
-          <input v-model="note" type="text" placeholder="备注（可选）">
+        <div class="field-row">
+          <label class="field-label">对局时间</label>
+          <el-date-picker
+            v-model="playedAt"
+            type="datetime"
+            placeholder="选择对局时间"
+            format="YYYY-MM-DD HH:mm"
+          />
         </div>
-        <button class="btn btn-primary btn-block" :disabled="submitting" @click="submitGame">
-          记录对局
-        </button>
+
+        <div class="field-row">
+          <el-input v-model="note" placeholder="备注（可选）" />
+        </div>
+
+        <el-button
+          type="primary"
+          class="submit-btn"
+          :loading="submitting"
+          @click="submitGame"
+        >记录对局</el-button>
       </template>
-    </div>
+    </el-card>
   </div>
 </template>
 
 <style scoped>
-.add-player-row { display: flex; gap: 8px; margin-bottom: 4px; }
-.add-player-row input { flex: 1; }
-.dim { color: var(--text-dim); font-size: 14px; }
+.block-card { margin-bottom: 16px; }
+.add-player-row { display: flex; gap: 8px; }
 .player-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.player-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 6px 14px;
-  font-size: 14px;
-}
-.player-chip .remove { cursor: pointer; color: var(--text-dim); font-size: 16px; }
-.player-chip .remove:hover { color: var(--red); }
+.dim { color: var(--el-text-color-secondary); font-size: 14px; }
 .select-label { font-size: 14px; margin-bottom: 8px; }
 .player-select { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-.player-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg-hover);
-  border: 2px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-size: 14px;
-}
-.player-option.selected {
-  border-color: var(--accent);
-  background: rgba(232, 197, 71, 0.1);
-}
-.player-option:hover { border-color: var(--accent-dim); }
 .score-area { margin-top: 8px; }
 .score-row {
   display: flex;
@@ -195,14 +181,16 @@ async function submitGame() {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 .score-row label { min-width: 80px; font-size: 14px; }
-.score-row input { width: 120px; text-align: right; }
-.score-sum { margin-top: 12px; font-size: 13px; color: var(--text-dim); text-align: right; }
-.score-sum.zero { color: var(--green); }
-.score-sum.non-zero { color: var(--orange); }
-.note-row { margin-top: 12px; }
-.note-row input { width: 100%; }
-.btn-block { width: 100%; margin-top: 12px; }
+.score-row :deep(.el-input-number) { width: 140px; }
+.score-sum { margin-top: 12px; font-size: 13px; color: var(--el-text-color-secondary); text-align: right; }
+.score-sum.zero { color: var(--el-color-success); }
+.score-sum.non-zero { color: var(--el-color-warning); }
+.field-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.field-label { min-width: 60px; font-size: 14px; }
+.field-row :deep(.el-date-picker),
+.field-row :deep(.el-input) { flex: 1; }
+.submit-btn { width: 100%; margin-top: 16px; }
 </style>

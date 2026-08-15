@@ -3,6 +3,11 @@ using MahjongApi.Data;
 using MahjongApi.Models;
 using MahjongApi.DTOs;
 
+const int MaxPlayerNameLength = 50;
+const int MaxGameNoteLength = 200;
+const int MaxPlayersPerGame = 4;
+const int MaxScore = 1_000_000;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // SQLite 数据库
@@ -55,6 +60,8 @@ app.MapPost("/api/players", async (AppDbContext db, CreatePlayerRequest req) =>
     var name = req.Name?.Trim() ?? "";
     if (string.IsNullOrEmpty(name))
         return Results.BadRequest(new { message = "玩家名不能为空" });
+    if (name.Length > MaxPlayerNameLength)
+        return Results.BadRequest(new { message = $"玩家名不能超过{MaxPlayerNameLength}个字符" });
 
     var exists = await db.Players.AnyAsync(p => p.Name == name);
     if (exists)
@@ -115,6 +122,12 @@ app.MapPost("/api/games", async (AppDbContext db, CreateGameRequest req) =>
 {
     if (req.Players is null || req.Players.Count < 2)
         return Results.BadRequest(new { message = "至少需要2名玩家" });
+    if (req.Players.Count > MaxPlayersPerGame)
+        return Results.BadRequest(new { message = $"最多支持{MaxPlayersPerGame}名玩家" });
+    if (req.Players.Any(p => p.Score < -MaxScore || p.Score > MaxScore))
+        return Results.BadRequest(new { message = "得分超出允许范围" });
+    if ((req.Note?.Length ?? 0) > MaxGameNoteLength)
+        return Results.BadRequest(new { message = $"备注不能超过{MaxGameNoteLength}个字符" });
 
     var playerIds = req.Players.Select(p => p.PlayerId).Distinct().ToList();
     if (playerIds.Count != req.Players.Count)

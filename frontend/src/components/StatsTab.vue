@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { api } from '../api.js'
 
 const props = defineProps({
@@ -15,9 +15,9 @@ const useTimeRange = ref(false)
 const timeFrom = ref('')
 const timeTo = ref('')
 const useExcludePlayer = ref(false)
-const excludePlayerId = ref('')
+const excludePlayerIds = ref([])
 const useIncludePlayer = ref(false)
-const includePlayerId = ref('')
+const includePlayerIds = ref([])
 const bulkSelecting = ref(false)
 
 // 所有出现在对局中的玩家（含已从玩家池删除的）
@@ -31,6 +31,9 @@ const allPlayers = computed(() => {
   })
   return Array.from(map.entries()).map(([id, name]) => ({ id, name }))
 })
+
+watch(useExcludePlayer, v => { if (!v) excludePlayerIds.value = [] })
+watch(useIncludePlayer, v => { if (!v) includePlayerIds.value = [] })
 
 // 筛选后的对局
 const filteredGames = computed(() => {
@@ -49,18 +52,24 @@ const filteredGames = computed(() => {
         if (gt > t) return false
       }
     }
-    if (useExcludePlayer.value && excludePlayerId.value) {
-      if (g.players.some(p => p.playerId === Number(excludePlayerId.value))) return false
+    if (useExcludePlayer.value && excludePlayerIds.value.length) {
+      const ids = new Set(excludePlayerIds.value.map(Number))
+      if (g.players.some(p => ids.has(p.playerId))) return false
     }
-    if (useIncludePlayer.value && includePlayerId.value) {
-      if (!g.players.some(p => p.playerId === Number(includePlayerId.value))) return false
+    if (useIncludePlayer.value && includePlayerIds.value.length) {
+      const ids = new Set(includePlayerIds.value.map(Number))
+      for (const id of ids) {
+        if (!g.players.some(p => p.playerId === id)) return false
+      }
     }
     return true
   })
 })
 
 // 已勾选的对局
-const selectedGames = computed(() => filteredGames.value.filter(g => g.selected))
+const selectedGames = computed(() =>
+  filteredGames.value.filter(g => g.selected && g.status !== GAME_STATUS.VOIDED)
+)
 
 // 玩家统计
 const playerStats = computed(() => {
@@ -104,14 +113,16 @@ function scoreClass(score) {
   return score > 0 ? 'score-positive' : score < 0 ? 'score-negative' : ''
 }
 function sign(score) { return score > 0 ? '+' : '' }
+function rate(wins, games) {
+  return games > 0 ? (wins / games * 100).toFixed(0) + '%' : '-'
+}
 
-async function toggleSelected(g, event) {
-  const selected = event.target.checked
+async function toggleSelected(g, selected) {
   try {
     await api.updateGameSelected(g.id, selected)
     emit('refresh-games')
   } catch (e) {
-    emit('toast', e.message)
+    emit('toast', e.message, 'error')
   }
 }
 
@@ -120,7 +131,7 @@ async function selectAll(select) {
 
   const targets = filteredGames.value.filter(g => g.selected !== select)
   if (targets.length === 0) {
-    emit('toast', select ? '已全部勾选' : '已全部取消勾选')
+    emit('toast', select ? '已全部勾选' : '已全部取消勾选', 'info')
     return
   }
 
@@ -132,7 +143,7 @@ async function selectAll(select) {
     emit('refresh-games')
   } catch (e) {
     emit('refresh-games')
-    emit('toast', e.message)
+    emit('toast', e.message, 'error')
   } finally {
     bulkSelecting.value = false
   }
@@ -142,57 +153,55 @@ async function selectAll(select) {
 <template>
   <div>
     <!-- 筛选条件 -->
-    <div class="card">
-      <h2>筛选条件</h2>
-      <div class="filter-group">
-        <label class="filter-check">
-          <input v-model="excludeVoid" type="checkbox">
-          排除已作废记录
-        </label>
-      </div>
+    <el-card class="block-card">
+      <template #header>筛选条件</template>
+      <el-checkbox v-model="excludeVoid">排除已作废记录</el-checkbox>
 
-      <div class="filter-group">
-        <label class="filter-check">
-          <input v-model="useTimeRange" type="checkbox">
-          时间范围
-        </label>
-        <div class="filter-content" :class="{ disabled: !useTimeRange }">
-          <input v-model="timeFrom" type="date">
+      <div class="filter-row">
+        <el-checkbox v-model="useTimeRange">时间范围</el-checkbox>
+        <div v-show="useTimeRange" class="filter-inline">
+          <el-date-picker v-model="timeFrom" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" />
           <span>至</span>
-          <input v-model="timeTo" type="date">
+          <el-date-picker v-model="timeTo" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" />
         </div>
       </div>
 
-      <div class="filter-group">
-        <label class="filter-check">
-          <input v-model="useExcludePlayer" type="checkbox">
-          排除包含某玩家的对局
-        </label>
-        <div class="filter-content" :class="{ disabled: !useExcludePlayer }">
-          <select v-model="excludePlayerId">
-            <option value="">选择玩家</option>
-            <option v-for="p in allPlayers" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
-        </div>
+      <div class="filter-row">
+        <el-checkbox v-model="useExcludePlayer">排除包含以下玩家的对局</el-checkbox>
+        <el-select
+          v-show="useExcludePlayer"
+          v-model="excludePlayerIds"
+          multiple
+          collapse-tags
+          collapse-tags-tooltip
+          clearable
+          placeholder="选择玩家"
+          class="player-select"
+        >
+          <el-option v-for="p in allPlayers" :key="p.id" :label="p.name" :value="p.id" />
+        </el-select>
       </div>
 
-      <div class="filter-group">
-        <label class="filter-check">
-          <input v-model="useIncludePlayer" type="checkbox">
-          仅包含某玩家的对局
-        </label>
-        <div class="filter-content" :class="{ disabled: !useIncludePlayer }">
-          <select v-model="includePlayerId">
-            <option value="">选择玩家</option>
-            <option v-for="p in allPlayers" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
-        </div>
+      <div class="filter-row">
+        <el-checkbox v-model="useIncludePlayer">同时包含以下玩家的对局</el-checkbox>
+        <el-select
+          v-show="useIncludePlayer"
+          v-model="includePlayerIds"
+          multiple
+          collapse-tags
+          collapse-tags-tooltip
+          clearable
+          placeholder="选择玩家"
+          class="player-select"
+        >
+          <el-option v-for="p in allPlayers" :key="p.id" :label="p.name" :value="p.id" />
+        </el-select>
       </div>
-    </div>
+    </el-card>
 
     <!-- 统计概览 -->
-    <div class="card">
-      <h2>统计概览</h2>
+    <el-card class="block-card">
+      <template #header>统计概览</template>
       <div class="summary-grid">
         <div class="summary-card">
           <div class="label">纳入统计</div>
@@ -212,30 +221,38 @@ async function selectAll(select) {
         </div>
       </div>
 
-      <p v-if="playerStats.length === 0" class="empty-hint">没有符合条件的统计数据</p>
+      <el-empty v-if="playerStats.length === 0" description="没有符合条件的统计数据" />
       <template v-else>
-        <table class="stats-table">
-          <thead>
-            <tr>
-              <th>排名</th><th>玩家</th><th>对局</th><th>总积分</th><th>场均</th>
-              <th>最高</th><th>最低</th><th>胜</th><th>负</th><th>胜率</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(p, i) in playerStats" :key="p.id">
-              <td :class="{ 'rank-1': i === 0 }">{{ i + 1 }}</td>
-              <td>{{ p.name }}</td>
-              <td>{{ p.games }}</td>
-              <td :class="scoreClass(p.total)" class="total">{{ sign(p.total) }}{{ p.total }}</td>
-              <td>{{ p.games > 0 ? (p.total / p.games).toFixed(1) : 0 }}</td>
-              <td class="score-positive">{{ p.max !== -Infinity ? sign(p.max) + p.max : '-' }}</td>
-              <td class="score-negative">{{ p.min !== Infinity ? sign(p.min) + p.min : '-' }}</td>
-              <td class="score-positive">{{ p.wins }}</td>
-              <td class="score-negative">{{ p.losses }}</td>
-              <td>{{ p.games > 0 ? (p.wins / p.games * 100).toFixed(0) + '%' : '-' }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <el-table :data="playerStats" style="width: 100%; margin-top: 12px" :row-class-name="() => 'stats-row'">
+          <el-table-column type="index" label="排名" width="60" />
+          <el-table-column prop="name" label="玩家" />
+          <el-table-column prop="games" label="对局" width="70" />
+          <el-table-column label="总积分" width="90">
+            <template #default="{ row }">
+              <span :class="scoreClass(row.total)" class="total">{{ sign(row.total) }}{{ row.total }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="场均" width="80">
+            <template #default="{ row }">
+              {{ row.games > 0 ? (row.total / row.games).toFixed(1) : 0 }}
+            </template>
+          </el-table-column>
+          <el-table-column label="最高" width="80">
+            <template #default="{ row }">
+              <span class="score-positive">{{ row.max !== -Infinity ? sign(row.max) + row.max : '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="最低" width="80">
+            <template #default="{ row }">
+              <span class="score-negative">{{ row.min !== Infinity ? sign(row.min) + row.min : '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="wins" label="胜" width="60" />
+          <el-table-column prop="losses" label="负" width="60" />
+          <el-table-column label="胜率" width="70">
+            <template #default="{ row }">{{ rate(row.wins, row.games) }}</template>
+          </el-table-column>
+        </el-table>
 
         <div class="bar-chart">
           <h3>总积分对比</h3>
@@ -251,19 +268,21 @@ async function selectAll(select) {
           </div>
         </div>
       </template>
-    </div>
+    </el-card>
 
     <!-- 记录列表 -->
-    <div class="card">
-      <div class="action-bar">
-        <h2 class="inline-h2">记录列表</h2>
-        <div class="actions">
-          <button class="btn btn-ghost btn-sm" :disabled="bulkSelecting" @click="selectAll(true)">全选</button>
-          <button class="btn btn-ghost btn-sm" :disabled="bulkSelecting" @click="selectAll(false)">取消全选</button>
+    <el-card class="block-card">
+      <template #header>
+        <div class="list-header">
+          <span>记录列表</span>
+          <div class="list-actions">
+            <el-button text size="small" :disabled="bulkSelecting" @click="selectAll(true)">全选</el-button>
+            <el-button text size="small" :disabled="bulkSelecting" @click="selectAll(false)">取消全选</el-button>
+          </div>
         </div>
-      </div>
+      </template>
 
-      <p v-if="filteredGames.length === 0" class="empty-hint">没有符合条件的记录</p>
+      <el-empty v-if="filteredGames.length === 0" description="没有符合条件的记录" />
       <div v-else class="record-list">
         <div
           v-for="g in [...filteredGames].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))"
@@ -271,11 +290,11 @@ async function selectAll(select) {
           class="record-item"
           :class="{ voided: g.status === GAME_STATUS.VOIDED, unchecked: !g.selected }"
         >
-          <input :checked="g.selected" type="checkbox" @change="toggleSelected(g, $event)">
+          <el-checkbox :model-value="g.selected" @change="toggleSelected(g, $event)" />
           <div class="record-info">
             <div class="record-time">
               🕐 {{ formatTime(g.playedAt) }}
-              <span v-if="g.status === GAME_STATUS.VOIDED" class="badge badge-voided">已作废</span>
+              <el-tag v-if="g.status === GAME_STATUS.VOIDED" type="info" size="small" effect="plain">已作废</el-tag>
             </div>
             <div class="record-players">
               <span v-for="p in g.players" :key="p.playerId">
@@ -285,71 +304,45 @@ async function selectAll(select) {
           </div>
         </div>
       </div>
-    </div>
+    </el-card>
   </div>
 </template>
 
 <style scoped>
-.filter-group {
+.block-card { margin-bottom: 16px; }
+.filter-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
-.filter-group:last-child { border-bottom: none; }
-.filter-check {
-  font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-.filter-check input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.filter-content { display: flex; align-items: center; gap: 8px; }
-.filter-content.disabled { opacity: 0.35; pointer-events: none; }
+.filter-row:last-child { border-bottom: none; }
+.filter-inline { display: flex; align-items: center; gap: 8px; }
+.player-select { min-width: 280px; flex: 1; max-width: 520px; }
 
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 12px;
-  margin-bottom: 16px;
 }
-.summary-card { background: var(--bg-hover); border-radius: 8px; padding: 12px; text-align: center; }
-.summary-card .label { font-size: 12px; color: var(--text-dim); }
+.summary-card { background: var(--el-fill-color-light); border-radius: 8px; padding: 12px; text-align: center; }
+.summary-card .label { font-size: 12px; color: var(--el-text-color-secondary); }
 .summary-card .value { font-size: 20px; font-weight: bold; margin-top: 4px; }
 
-.empty-hint { color: var(--text-dim); text-align: center; padding: 20px; }
-
-.stats-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
-.stats-table th {
-  background: var(--bg-hover);
-  padding: 10px 6px;
-  text-align: center;
-  font-weight: 600;
-  color: var(--text-dim);
-  border-bottom: 2px solid var(--border);
-  white-space: nowrap;
-}
-.stats-table td { padding: 10px 6px; text-align: center; border-bottom: 1px solid var(--border); }
-.stats-table .total { font-weight: bold; }
-.rank-1 { color: var(--accent); font-weight: bold; }
+.score-positive { color: var(--el-color-success); }
+.score-negative { color: var(--el-color-danger); }
+.total { font-weight: bold; }
 
 .bar-chart { margin-top: 16px; }
-.bar-chart h3 { font-size: 14px; color: var(--accent); margin-bottom: 12px; }
+.bar-chart h3 { font-size: 14px; color: var(--el-color-primary); margin-bottom: 12px; }
 .bar-item { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .bar-label { width: 60px; font-size: 13px; text-align: right; }
 .bar-container {
   flex: 1;
   height: 24px;
-  background: var(--bg-input);
+  background: var(--el-fill-color);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -365,42 +358,30 @@ async function selectAll(select) {
   transition: width 0.3s;
   min-width: 30px;
 }
-.bar-positive { background: var(--green-dim); color: var(--green); }
-.bar-negative { background: var(--red-dim); color: var(--red); }
+.bar-positive { background: var(--el-color-success-light-3); color: var(--el-color-success); }
+.bar-negative { background: var(--el-color-danger-light-3); color: var(--el-color-danger); }
 
-.action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.inline-h2 { font-size: 16px; color: var(--accent); }
-.action-bar .actions { display: flex; gap: 8px; }
-
+.list-header { display: flex; justify-content: space-between; align-items: center; }
+.list-header .list-actions { display: flex; gap: 4px; }
 .record-list { max-height: 600px; overflow-y: auto; }
 .record-item {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 10px;
-  background: var(--bg-card);
+  background: var(--el-fill-color-light);
   border-radius: 8px;
   margin-bottom: 8px;
-  border: 1px solid var(--border);
-  transition: opacity 0.2s;
+  border: 1px solid var(--el-border-color-lighter);
 }
 .record-item.voided { opacity: 0.5; }
 .record-item.unchecked { opacity: 0.4; }
-.record-item input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--accent);
-  cursor: pointer;
-  flex-shrink: 0;
-}
 .record-info { flex: 1; font-size: 13px; }
-.record-time { color: var(--text-dim); font-size: 12px; }
-.record-players { color: var(--text); margin-top: 2px; }
+.record-time { color: var(--el-text-color-secondary); font-size: 12px; }
+.record-players { color: var(--el-text-color-primary); margin-top: 2px; }
 .record-players > span { margin-right: 8px; }
 
 @media (max-width: 600px) {
-  .stats-table { font-size: 12px; }
-  .stats-table th, .stats-table td { padding: 6px 3px; }
-  .filter-group { flex-direction: column; align-items: flex-start; }
+  :deep(.el-table) { font-size: 12px; }
 }
 </style>

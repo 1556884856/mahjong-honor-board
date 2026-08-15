@@ -1,10 +1,13 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../api.js'
 
 const props = defineProps({ games: { type: Array, default: () => [] } })
 const emit = defineEmits(['refresh-games', 'toast', 'confirm'])
 const GAME_STATUS = { ACTIVE: 0, VOIDED: 1 }
+
+const statusFilter = ref('all') // all | active | voided
+const currentPage = ref(1)
 
 const sortedGames = computed(() =>
   [...props.games].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
@@ -12,6 +15,45 @@ const sortedGames = computed(() =>
 
 const activeCount = computed(() => sortedGames.value.filter(g => g.status === GAME_STATUS.ACTIVE).length)
 const voidedCount = computed(() => sortedGames.value.filter(g => g.status === GAME_STATUS.VOIDED).length)
+
+const filteredGames = computed(() => {
+  if (statusFilter.value === 'active') {
+    return sortedGames.value.filter(g => g.status === GAME_STATUS.ACTIVE)
+  }
+  if (statusFilter.value === 'voided') {
+    return sortedGames.value.filter(g => g.status === GAME_STATUS.VOIDED)
+  }
+  return sortedGames.value
+})
+
+// 每页条数：根据窗口高度动态计算
+function computePageSize() {
+  const h = window.innerHeight
+  const n = Math.floor((h - 380) / 130)
+  return Math.max(5, Math.min(20, n))
+}
+const pageSize = ref(computePageSize())
+
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(filteredGames.value.length / pageSize.value))
+)
+
+const pagedGames = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredGames.value.slice(start, start + pageSize.value)
+})
+
+watch(statusFilter, () => { currentPage.value = 1 })
+watch(() => filteredGames.value.length, () => {
+  if (currentPage.value > totalPages.value) currentPage.value = totalPages.value
+})
+
+function onResize() {
+  pageSize.value = computePageSize()
+  if (currentPage.value > totalPages.value) currentPage.value = totalPages.value
+}
+onMounted(() => window.addEventListener('resize', onResize))
+onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 
 function formatTime(iso) {
   const d = new Date(iso)
@@ -28,9 +70,9 @@ async function voidGame(game) {
   try {
     await api.updateGameStatus(game.id, GAME_STATUS.VOIDED)
     emit('refresh-games')
-    emit('toast', '已作废')
+    emit('toast', '已作废', 'success')
   } catch (e) {
-    emit('toast', e.message)
+    emit('toast', e.message, 'error')
   }
 }
 
@@ -38,9 +80,9 @@ async function restoreGame(game) {
   try {
     await api.updateGameStatus(game.id, GAME_STATUS.ACTIVE)
     emit('refresh-games')
-    emit('toast', '已恢复')
+    emit('toast', '已恢复', 'success')
   } catch (e) {
-    emit('toast', e.message)
+    emit('toast', e.message, 'error')
   }
 }
 
@@ -48,7 +90,7 @@ function permanentDelete(game) {
   emit('confirm', '永久删除后无法恢复，确定删除？', async () => {
     await api.deleteGame(game.id)
     emit('refresh-games')
-    emit('toast', '已永久删除')
+    emit('toast', '已永久删除', 'success')
   })
 }
 </script>
@@ -56,67 +98,86 @@ function permanentDelete(game) {
 <template>
   <div>
     <div class="action-bar">
-      <div class="count">
+      <span class="count">
         共 <strong>{{ sortedGames.length }}</strong> 条记录
         （{{ activeCount }} 条正常，{{ voidedCount }} 条已作废）
-      </div>
+      </span>
     </div>
 
-    <div v-if="sortedGames.length === 0" class="empty-state">
-      <p>还没有对局记录</p>
-      <p>去「记录对局」开始第一局吧</p>
-    </div>
+    <el-empty v-if="sortedGames.length === 0" description="还没有对局记录，去「记录对局」开始第一局吧" />
 
-    <div
-      v-for="g in sortedGames"
-      :key="g.id"
-      class="game-card"
-      :class="{ voided: g.status === GAME_STATUS.VOIDED }"
-    >
-      <div class="game-header">
-        <span class="game-time">🕐 {{ formatTime(g.playedAt) }}</span>
-        <span class="badge" :class="g.status === GAME_STATUS.VOIDED ? 'badge-voided' : 'badge-active'">
-          {{ g.status === GAME_STATUS.VOIDED ? '已作废' : '正常' }}
-        </span>
-      </div>
-      <div class="game-players">
-        <div v-for="p in g.players" :key="p.playerId" class="player-score">
-          <span>{{ p.playerName }}</span>
-          <span :class="scoreClass(p.score)">{{ sign(p.score) }}{{ p.score }}</span>
-        </div>
-      </div>
-      <div v-if="g.note" class="game-note">📝 {{ g.note }}</div>
-      <div class="game-actions">
-        <template v-if="g.status === GAME_STATUS.VOIDED">
-          <button class="btn btn-ghost btn-sm" @click="restoreGame(g)">恢复</button>
-          <button class="btn btn-danger btn-sm" @click="permanentDelete(g)">永久删除</button>
-        </template>
-        <template v-else>
-          <button class="btn btn-warning btn-sm" @click="voidGame(g)">作废</button>
-        </template>
-      </div>
-    </div>
+    <template v-else>
+      <el-radio-group v-model="statusFilter" class="status-filter">
+        <el-radio-button value="all">全部</el-radio-button>
+        <el-radio-button value="active">正常</el-radio-button>
+        <el-radio-button value="voided">作废</el-radio-button>
+      </el-radio-group>
+
+      <el-empty v-if="filteredGames.length === 0" description="该分类下暂无记录" />
+
+      <template v-else>
+        <el-card
+          v-for="g in pagedGames"
+          :key="g.id"
+          class="game-card"
+          :class="{ voided: g.status === GAME_STATUS.VOIDED }"
+          shadow="hover"
+        >
+          <div class="game-header">
+            <span class="game-time">🕐 {{ formatTime(g.playedAt) }}</span>
+            <el-tag :type="g.status === GAME_STATUS.VOIDED ? 'info' : 'success'" size="small" effect="light">
+              {{ g.status === GAME_STATUS.VOIDED ? '已作废' : '正常' }}
+            </el-tag>
+          </div>
+          <div class="game-players">
+            <div v-for="p in g.players" :key="p.playerId" class="player-score">
+              <span>{{ p.playerName }}</span>
+              <span :class="scoreClass(p.score)">{{ sign(p.score) }}{{ p.score }}</span>
+            </div>
+          </div>
+          <div v-if="g.note" class="game-note">📝 {{ g.note }}</div>
+          <div class="game-actions">
+            <template v-if="g.status === GAME_STATUS.VOIDED">
+              <el-button text type="primary" size="small" @click="restoreGame(g)">恢复</el-button>
+              <el-button text type="danger" size="small" @click="permanentDelete(g)">永久删除</el-button>
+            </template>
+            <template v-else>
+              <el-button text type="warning" size="small" @click="voidGame(g)">作废</el-button>
+            </template>
+          </div>
+        </el-card>
+
+        <el-pagination
+          v-if="totalPages > 1"
+          v-model:current-page="currentPage"
+          class="pagination"
+          :page-size="pageSize"
+          :total="filteredGames.length"
+          layout="prev, pager, next, total"
+          background
+          small
+        />
+      </template>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.count { font-size: 14px; color: var(--text-dim); }
-.count strong { color: var(--text); }
+.action-bar { margin-bottom: 12px; }
+.count { font-size: 14px; color: var(--el-text-color-secondary); }
+.count strong { color: var(--el-text-color-primary); }
+.status-filter { margin-bottom: 12px; }
 .game-card {
-  background: var(--bg-card);
-  border-radius: var(--radius);
-  padding: 16px;
   margin-bottom: 12px;
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--el-color-primary);
 }
 .game-card.voided {
-  border-left-color: var(--orange);
+  border-left-color: var(--el-color-warning);
   opacity: 0.6;
 }
 .game-card.voided .game-players { text-decoration: line-through; }
 .game-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.game-time { font-size: 13px; color: var(--text-dim); }
+.game-time { font-size: 13px; color: var(--el-text-color-secondary); }
 .game-players {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -127,13 +188,14 @@ function permanentDelete(game) {
   display: flex;
   justify-content: space-between;
   padding: 6px 10px;
-  background: var(--bg-hover);
+  background: var(--el-fill-color-light);
   border-radius: 6px;
   font-size: 14px;
 }
-.game-note { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; font-style: italic; }
+.score-positive { color: var(--el-color-success); }
+.score-negative { color: var(--el-color-danger); }
+.score-zero { color: var(--el-text-color-secondary); }
+.game-note { font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 8px; font-style: italic; }
 .game-actions { display: flex; gap: 8px; }
-@media (max-width: 600px) {
-  .game-players { grid-template-columns: 1fr 1fr; }
-}
+.pagination { margin-top: 8px; justify-content: center; }
 </style>

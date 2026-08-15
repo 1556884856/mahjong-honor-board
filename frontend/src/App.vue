@@ -1,24 +1,52 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { api } from './api.js'
 import RecordTab from './components/RecordTab.vue'
 import HistoryTab from './components/HistoryTab.vue'
 import StatsTab from './components/StatsTab.vue'
+
+const THEME_KEY = 'mahjong-theme'
+const THEMES = [
+  { value: 'light', label: '亮色' },
+  { value: 'dark', label: '深色' },
+  { value: 'green', label: '麻将绿' },
+]
 
 const currentTab = ref('record')
 const players = ref([])
 const games = ref([])
 const loading = ref(false)
 
-const toastMsg = ref('')
-const confirmState = ref(null) // { message, callback }
-let toastTimer = null
+const theme = ref('dark')
+const themeLabel = computed(() =>
+  THEMES.find(t => t.value === theme.value)?.label || '深色'
+)
+
+function applyTheme(t) {
+  theme.value = t
+  const root = document.documentElement
+  if (t === 'light') {
+    root.classList.remove('dark')
+    root.classList.remove('theme-green')
+  } else {
+    root.classList.add('dark')
+    root.classList.toggle('theme-green', t === 'green')
+  }
+  localStorage.setItem(THEME_KEY, t)
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY)
+  applyTheme(saved && THEMES.some(t => t.value === saved) ? saved : 'dark')
+}
 
 async function refreshPlayers() {
   try {
     players.value = await api.getPlayers()
   } catch (e) {
-    showToast(e.message || '加载玩家失败')
+    ElMessage.error(e.message || '加载玩家失败')
   }
 }
 
@@ -26,7 +54,7 @@ async function refreshGames() {
   try {
     games.value = await api.getGames()
   } catch (e) {
-    showToast(e.message || '加载对局失败')
+    ElMessage.error(e.message || '加载对局失败')
   }
 }
 
@@ -35,144 +63,116 @@ async function refreshAll() {
   try {
     await Promise.all([refreshPlayers(), refreshGames()])
   } catch (e) {
-    showToast(e.message || '加载失败')
+    ElMessage.error(e.message || '加载失败')
   } finally {
     loading.value = false
   }
 }
 
-function switchTab(tab) {
-  currentTab.value = tab
-}
-
-function showToast(msg) {
-  if (toastTimer) clearTimeout(toastTimer)
-  toastMsg.value = msg
-  toastTimer = setTimeout(() => { toastMsg.value = '' }, 2500)
+function showToast(msg, type = 'info') {
+  ElMessage({
+    message: msg,
+    type,
+    customClass: 'app-toast',
+    duration: 2500,
+    showClose: false,
+  })
 }
 
 function showConfirm(message, callback) {
-  confirmState.value = { message, callback }
+  ElMessageBox.confirm(message, '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning',
+  })
+    .then(async () => {
+      try {
+        await callback()
+      } catch (e) {
+        ElMessage.error(e.message || '操作失败')
+      }
+    })
+    .catch(() => {})
 }
 
-function closeConfirm() {
-  confirmState.value = null
-}
-
-async function onConfirm() {
-  const callback = confirmState.value?.callback
-  if (!callback) {
-    closeConfirm()
-    return
-  }
-
-  try {
-    await callback()
-  } catch (e) {
-    showToast(e.message || '操作失败')
-  } finally {
-    closeConfirm()
-  }
-}
-
-onMounted(refreshAll)
+onMounted(() => {
+  initTheme()
+  refreshAll()
+})
 </script>
 
 <template>
-  <header class="app-header">
-    <h1>🀄 麻将荣誉榜</h1>
-    <nav class="tabs">
-      <button :class="{ active: currentTab === 'record' }" @click="switchTab('record')">记录对局</button>
-      <button :class="{ active: currentTab === 'history' }" @click="switchTab('history')">历史记录</button>
-      <button :class="{ active: currentTab === 'stats' }" @click="switchTab('stats')">统计分析</button>
-    </nav>
-  </header>
-
-  <main>
-    <RecordTab
-      v-if="currentTab === 'record'"
-      :players="players"
-      @refresh-players="refreshPlayers"
-      @game-created="refreshGames"
-      @toast="showToast"
-    />
-    <HistoryTab
-      v-else-if="currentTab === 'history'"
-      :games="games"
-      @refresh-games="refreshGames"
-      @toast="showToast"
-      @confirm="showConfirm"
-    />
-    <StatsTab
-      v-else
-      :players="players"
-      :games="games"
-      @refresh-games="refreshGames"
-      @toast="showToast"
-    />
-  </main>
-
-  <div v-if="loading" class="loading-overlay">加载中...</div>
-  <div v-if="toastMsg" class="toast">{{ toastMsg }}</div>
-
-  <div v-if="confirmState" class="confirm-overlay" @click.self="closeConfirm">
-    <div class="confirm-dialog">
-      <p>{{ confirmState.message }}</p>
-      <div class="actions">
-        <button class="btn btn-ghost" @click="closeConfirm">取消</button>
-        <button class="btn btn-danger" @click="onConfirm">确定</button>
+  <el-config-provider :locale="zhCn">
+    <div v-loading="loading" element-loading-text="加载中..." class="app-wrap">
+    <header class="app-header">
+      <h1>🀄 麻将荣誉榜</h1>
+      <div class="header-right">
+        <el-dropdown trigger="click" @command="applyTheme">
+          <el-button text>
+            主题：{{ themeLabel }}
+            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-for="t in THEMES"
+                :key="t.value"
+                :command="t.value"
+                :disabled="t.value === theme"
+              >{{ t.label }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
+    </header>
+
+    <el-tabs v-model="currentTab" class="app-tabs">
+      <el-tab-pane label="记录对局" name="record">
+        <RecordTab
+          :players="players"
+          @refresh-players="refreshPlayers"
+          @game-created="refreshGames"
+          @toast="showToast"
+        />
+      </el-tab-pane>
+      <el-tab-pane label="历史记录" name="history">
+        <HistoryTab
+          :games="games"
+          @refresh-games="refreshGames"
+          @toast="showToast"
+          @confirm="showConfirm"
+        />
+      </el-tab-pane>
+      <el-tab-pane label="统计分析" name="stats">
+        <StatsTab
+          :players="players"
+          :games="games"
+          @refresh-games="refreshGames"
+          @toast="showToast"
+        />
+      </el-tab-pane>
+    </el-tabs>
     </div>
-  </div>
+  </el-config-provider>
 </template>
 
 <style scoped>
+.app-wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  min-height: 100vh;
+}
 .app-header {
-  text-align: center;
-  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 0 8px;
 }
 .app-header h1 {
   font-size: 24px;
-  color: var(--accent);
-  margin-bottom: 12px;
+  color: var(--el-color-primary);
 }
-.tabs {
-  display: flex;
-  gap: 4px;
-  background: var(--bg-card);
-  border-radius: var(--radius);
-  padding: 4px;
-}
-.tabs button {
-  flex: 1;
-  padding: 10px;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 14px;
-  cursor: pointer;
-  border-radius: 8px;
-  transition: all 0.2s;
-}
-.tabs button.active {
-  background: var(--accent);
-  color: #000;
-  font-weight: 600;
-}
-.tabs button:hover:not(.active) {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.loading-overlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--accent);
-  font-weight: 600;
-  z-index: 1500;
+.app-tabs :deep(.el-tabs__header) {
+  margin-bottom: 16px;
 }
 </style>

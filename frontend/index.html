@@ -2,6 +2,18 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function () {
+        var t = localStorage.getItem('mahjong-theme') || 'dark';
+        var el = document.documentElement;
+        if (t === 'light') {
+          el.classList.remove('dark', 'theme-green');
+        } else {
+          el.classList.add('dark');
+          if (t === 'green') el.classList.add('theme-green');
+        }
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>🀄 麻将荣誉榜</title>
