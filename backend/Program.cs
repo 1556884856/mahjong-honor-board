@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MahjongApi;
 using MahjongApi.Data;
 using MahjongApi.Models;
 using MahjongApi.DTOs;
@@ -9,6 +10,15 @@ const int MaxPlayersPerGame = 4;
 const int MaxScore = 1_000_000;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ===== 鉴权配置 =====
+var wechatAppId = builder.Configuration["Wechat:AppId"] ?? "";
+var wechatAppSecret = builder.Configuration["Wechat:AppSecret"] ?? "";
+var allowedOpenIds = builder.Configuration.GetSection("Wechat:AllowedOpenIds").Get<string[]>() ?? [];
+var wechatAutoRegister = builder.Configuration.GetValue<bool?>("Wechat:AutoRegister") ?? true;
+var authTokenSecret = builder.Configuration["Auth:TokenSecret"] ?? "";
+var adminToken = builder.Configuration["Auth:AdminToken"] ?? "";
+var tokenExpireDays = int.TryParse(builder.Configuration["Auth:TokenExpireDays"], out var d) ? d : 30;
 
 // SQLite 数据库
 var configuredDbPath = builder.Configuration["Database:Path"] ?? "mahjong.db";
@@ -40,13 +50,120 @@ var app = builder.Build();
 
 app.UseCors();
 
+// ===== 鉴权中间件：写接口（POST/PATCH/DELETE）要求有效 token =====
+// GET/OPTIONS/HEAD 与登录接口放行；token 可为 adminToken 或微信登录签发的 token。
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path.Value ?? "";
+    var method = context.Request.Method;
+
+    var needsAuth = path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase)
+                    && method != "GET"
+                    && method != "OPTIONS"
+                    && method != "HEAD"
+                    && !path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase);
+
+    if (!needsAuth)
+    {
+        await next();
+        return;
+    }
+
+    var auth = context.Request.Headers.Authorization.ToString();
+    var ok = false;
+    if (auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+    {
+        var token = auth.Substring("Bearer ".Length).Trim();
+        if (!string.IsNullOrEmpty(adminToken) && token == adminToken)
+        {
+            ok = true;
+        }
+        else
+        {
+            // 白名单 = 配置文件 AllowedOpenIds + 数据库 WechatUsers 表
+            var db = context.RequestServices.GetRequiredService<AppDbContext>();
+            var dbIds = await db.WechatUsers.AsNoTracking().Select(w => w.OpenId).ToListAsync();
+            var merged = allowedOpenIds.Concat(dbIds).Distinct().ToArray();
+            if (AuthHelpers.TryVerifyToken(token, authTokenSecret, merged, out _))
+            {
+                ok = true;
+            }
+        }
+    }
+
+    if (!ok)
+    {
+        context.Response.StatusCode = 401;
+        await context.Response.WriteAsJsonAsync(new { message = "未授权，请先登录" });
+        return;
+    }
+
+    await next();
+});
+
 // 启动时创建数据库和表
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
+    // 已有库不会自动补建新表，这里显式建 WechatUsers
+    db.Database.ExecuteSqlRaw("""
+        CREATE TABLE IF NOT EXISTS "WechatUsers" (
+            "Id" INTEGER NOT NULL CONSTRAINT "PK_WechatUsers" PRIMARY KEY AUTOINCREMENT,
+            "OpenId" TEXT NOT NULL,
+            "Name" TEXT NULL,
+            "CreatedAt" TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS "IX_WechatUsers_OpenId" ON "WechatUsers" ("OpenId");
+        """);
     SeedIfEmpty(db);
 }
+
+// ===== 微信登录 =====
+app.MapPost("/api/auth/login", async (LoginRequest req, AppDbContext db, ILoggerFactory loggerFactory) =>
+{
+    var logger = loggerFactory.CreateLogger("WechatLogin");
+    var code = req.Code?.Trim() ?? "";
+    if (string.IsNullOrEmpty(code))
+        return Results.BadRequest(new { message = "code 不能为空" });
+
+    if (string.IsNullOrEmpty(wechatAppId) || string.IsNullOrEmpty(wechatAppSecret))
+        return Results.Json(new { message = "服务器未配置微信 AppId/AppSecret" }, statusCode: 500);
+
+    var session = await AuthHelpers.Code2SessionAsync(wechatAppId, wechatAppSecret, code);
+    if (session is null || session.errcode != 0 || string.IsNullOrEmpty(session.openid))
+        return Results.Json(new { message = $"微信登录失败：{session?.errmsg ?? "网络错误"}" }, statusCode: 401);
+
+    logger.LogInformation("登录请求 openid={OpenId}", session.openid);
+
+    var dbOpenIds = await db.WechatUsers.AsNoTracking().Select(w => w.OpenId).ToListAsync();
+    var mergedOpenIds = allowedOpenIds.Concat(dbOpenIds).Distinct().ToArray();
+    var isAllowed = mergedOpenIds.Length == 0 || mergedOpenIds.Contains(session.openid);
+
+    // AutoRegister=true：新微信用户首次登录自动写入白名单。
+    // AutoRegister=false：仅允许 AllowedOpenIds 或数据库白名单中的用户登录。
+    if (!wechatAutoRegister && !isAllowed)
+    {
+        logger.LogWarning("未授权登录 openid={OpenId}", session.openid);
+        return Results.Json(new { message = "未授权", openid = session.openid }, statusCode: 403);
+    }
+
+    if (wechatAutoRegister && !dbOpenIds.Contains(session.openid))
+    {
+        db.WechatUsers.Add(new WechatUser
+        {
+            OpenId = session.openid,
+            Name = null,
+            CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+        logger.LogInformation("新用户已自动入库 openid={OpenId}", session.openid);
+    }
+
+    var expiresAt = DateTime.UtcNow.AddDays(tokenExpireDays);
+    var token = AuthHelpers.SignToken(session.openid, authTokenSecret, expiresAt);
+    return Results.Ok(new { token, openid = session.openid, expiresAt });
+});
 
 // ===== 玩家 API =====
 app.MapGet("/api/players", async (AppDbContext db) =>

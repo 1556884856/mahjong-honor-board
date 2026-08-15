@@ -28,3 +28,6 @@ public record GameDto(
 public record UpdateGameStatusRequest(GameStatus Status);
 
 public record UpdateGameSelectedRequest(bool Selected);
+
+// ===== 鉴权 =====
+public record LoginRequest(string Code);

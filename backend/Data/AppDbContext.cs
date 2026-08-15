@@ -10,6 +10,7 @@ public class AppDbContext : DbContext
     public DbSet<Player> Players => Set<Player>();
     public DbSet<Game> Games => Set<Game>();
     public DbSet<GamePlayer> GamePlayers => Set<GamePlayer>();
+    public DbSet<WechatUser> WechatUsers => Set<WechatUser>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -31,6 +32,11 @@ public class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(gp => gp.PlayerId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<WechatUser>(e =>
+        {
+            e.HasIndex(w => w.OpenId).IsUnique();
         });
     }
 }

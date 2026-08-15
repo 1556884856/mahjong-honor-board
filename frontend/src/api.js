@@ -1,8 +1,15 @@
 // API 请求封装
 const BASE = import.meta.env.VITE_API_BASE || '/api'
 
+// 管理员令牌通过构建环境变量注入，避免写死在源码中。
+const ADMIN_TOKEN = import.meta.env.VITE_ADMIN_TOKEN || ''
+
 async function request(method, url, body) {
   const options = { method, headers: {} }
+  // 写操作带上管理员令牌，避免后端鉴权拦截
+  if (method !== 'GET' && ADMIN_TOKEN) {
+    options.headers['Authorization'] = 'Bearer ' + ADMIN_TOKEN
+  }
   if (body !== undefined) {
     options.headers['Content-Type'] = 'application/json'
     options.body = JSON.stringify(body)
