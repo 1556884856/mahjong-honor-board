@@ -9,8 +9,10 @@ const GAME_STATUS = { ACTIVE: 0, VOIDED: 1 }
 const statusFilter = ref('all') // all | active | voided
 const currentPage = ref(1)
 
+function toDate(s) { return new Date(String(s).replace(' ', 'T')) }
+
 const sortedGames = computed(() =>
-  [...props.games].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
+  [...props.games].sort((a, b) => toDate(b.playedAt) - toDate(a.playedAt))
 )
 
 const activeCount = computed(() => sortedGames.value.filter(g => g.status === GAME_STATUS.ACTIVE).length)
@@ -56,9 +58,9 @@ onMounted(() => window.addEventListener('resize', onResize))
 onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 
 function formatTime(iso) {
-  const d = new Date(iso)
+  const d = toDate(iso)
   const pad = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 function scoreClass(score) {

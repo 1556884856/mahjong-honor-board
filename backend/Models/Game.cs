@@ -9,8 +9,8 @@ public class Game
 {
     public int Id { get; set; }
 
-    /// <summary>对局时间</summary>
-    public DateTime PlayedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>对局时间（上海时区，格式 yyyy-MM-dd HH:mm:ss）</summary>
+    public string PlayedAt { get; set; } = string.Empty;
 
     /// <summary>备注</summary>
     [MaxLength(200)]

@@ -22,6 +22,9 @@ const themeLabel = computed(
 function pad(n) {
   return String(n).padStart(2, '0')
 }
+function fmtLocal(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 
 function initNow() {
   const d = new Date()
@@ -126,9 +129,10 @@ async function submitGame() {
       return { playerId: id, score }
     })
 
-    const iso = new Date(`${playedAtDate.value}T${playedAtTime.value}:00`).toISOString()
+    const localDate = new Date(`${playedAtDate.value}T${playedAtTime.value}:00`)
+    const playedAtStr = fmtLocal(localDate)
     await api.createGame({
-      playedAt: isNaN(Date.parse(iso)) ? new Date().toISOString() : iso,
+      playedAt: playedAtStr,
       note: note.value.trim() || null,
       players: gamePlayers,
     })

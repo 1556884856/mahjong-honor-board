@@ -11,7 +11,7 @@ public record CreatePlayerRequest(string Name);
 public record GamePlayerInput(int PlayerId, int Score);
 
 public record CreateGameRequest(
-    DateTime? PlayedAt,
+    string? PlayedAt,
     string? Note,
     List<GamePlayerInput> Players);
 
@@ -19,7 +19,7 @@ public record GamePlayerDto(int PlayerId, string PlayerName, int Score);
 
 public record GameDto(
     int Id,
-    DateTime PlayedAt,
+    string PlayedAt,
     string? Note,
     GameStatus Status,
     bool Selected,

@@ -17,8 +17,12 @@ const themeLabel = computed(
   () => THEMES.find((t) => t.value === theme.value)?.label || '麻将绿'
 )
 
+function toDate(s) {
+  return new Date(String(s).replace(' ', 'T'))
+}
+
 const sortedGames = computed(() =>
-  [...games.value].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
+  [...games.value].sort((a, b) => toDate(b.playedAt) - toDate(a.playedAt))
 )
 
 const activeCount = computed(
@@ -81,8 +85,8 @@ async function loadGames() {
 }
 
 function formatTime(iso) {
-  const d = new Date(iso)
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const d = toDate(iso)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 function pad(n) {
   return String(n).padStart(2, '0')

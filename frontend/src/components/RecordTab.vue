@@ -52,6 +52,11 @@ async function removePlayer(player) {
   }
 }
 
+function fmtLocal(d) {
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 async function submitGame() {
   if (submitting.value) return
 
@@ -75,8 +80,9 @@ async function submitGame() {
       return { playerId: id, score }
     })
 
+    const playedAtStr = playedAt.value ? fmtLocal(new Date(playedAt.value)) : fmtLocal(new Date())
     await api.createGame({
-      playedAt: playedAt.value ? new Date(playedAt.value).toISOString() : new Date().toISOString(),
+      playedAt: playedAtStr,
       note: note.value.trim() || null,
       players,
     })

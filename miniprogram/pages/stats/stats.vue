@@ -50,15 +50,13 @@ const filteredGames = computed(() => {
   return games.value.filter((g) => {
     if (excludeVoid.value && g.status === GAME_STATUS.VOIDED) return false
     if (useTimeRange.value) {
-      const gt = new Date(g.playedAt)
+      const gt = toDate(g.playedAt)
       if (timeFrom.value) {
-        const f = new Date(timeFrom.value)
-        f.setHours(0, 0, 0, 0)
+        const f = new Date(timeFrom.value + 'T00:00:00')
         if (gt < f) return false
       }
       if (timeTo.value) {
-        const t = new Date(timeTo.value)
-        t.setHours(23, 59, 59, 999)
+        const t = new Date(timeTo.value + 'T23:59:59')
         if (gt > t) return false
       }
     }
@@ -154,9 +152,13 @@ async function loadAll() {
   }
 }
 
+function toDate(s) {
+  return new Date(String(s).replace(' ', 'T'))
+}
+
 function formatTime(iso) {
-  const d = new Date(iso)
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const d = toDate(iso)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 function pad(n) {
   return String(n).padStart(2, '0')
@@ -365,7 +367,7 @@ async function selectAll(select) {
       <view v-if="filteredGames.length === 0" class="empty dim">没有符合条件的记录</view>
       <view v-else class="record-list">
         <view
-          v-for="g in [...filteredGames].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))"
+          v-for="g in [...filteredGames].sort((a, b) => toDate(b.playedAt) - toDate(a.playedAt))"
           :key="g.id"
           class="record-item"
           :class="{ voided: g.status === GAME_STATUS.VOIDED, unchecked: !g.selected }"

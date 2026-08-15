@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 using MahjongApi;
 using MahjongApi.Data;
 using MahjongApi.Models;
@@ -116,6 +117,25 @@ using (var scope = app.Services.CreateScope())
         );
         CREATE UNIQUE INDEX IF NOT EXISTS "IX_WechatUsers_OpenId" ON "WechatUsers" ("OpenId");
         """);
+
+    // 一次性迁移：旧数据按 UTC 存储，统一转为上海时区 yyyy-MM-dd HH:mm:ss 字符串
+    var conn = db.Database.GetDbConnection();
+    if (conn.State != ConnectionState.Open) conn.Open();
+    using (var verCmd = conn.CreateCommand())
+    {
+        verCmd.CommandText = "PRAGMA user_version";
+        var version = Convert.ToInt32(verCmd.ExecuteScalar());
+        if (version < 1)
+        {
+            using var upd = conn.CreateCommand();
+            upd.CommandText = "UPDATE Games SET PlayedAt = strftime('%Y-%m-%d %H:%M:%S', PlayedAt, '+8 hours') WHERE PlayedAt IS NOT NULL AND PlayedAt <> ''";
+            upd.ExecuteNonQuery();
+            using var pragma = conn.CreateCommand();
+            pragma.CommandText = "PRAGMA user_version = 1";
+            pragma.ExecuteNonQuery();
+        }
+    }
+
     SeedIfEmpty(db);
 }
 
@@ -255,9 +275,18 @@ app.MapPost("/api/games", async (AppDbContext db, CreateGameRequest req) =>
         return Results.BadRequest(new { message = "存在无效的玩家" });
 
     var playerNameById = players.ToDictionary(p => p.Id, p => p.Name);
+
+    var playedAtStr = (req.PlayedAt ?? "").Trim();
+    if (!DateTime.TryParseExact(playedAtStr, "yyyy-MM-dd HH:mm:ss",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var playedAt))
+    {
+        playedAt = ChinaTime.Now;
+    }
+
     var game = new Game
     {
-        PlayedAt = req.PlayedAt ?? DateTime.UtcNow,
+        PlayedAt = playedAt.ToString("yyyy-MM-dd HH:mm:ss"),
         Note = req.Note,
         Status = GameStatus.Active,
         Selected = true,
@@ -272,16 +301,7 @@ app.MapPost("/api/games", async (AppDbContext db, CreateGameRequest req) =>
     db.Games.Add(game);
     await db.SaveChangesAsync();
 
-    var dto = new GameDto(
-        game.Id,
-        game.PlayedAt,
-        game.Note,
-        game.Status,
-        game.Selected,
-        game.GamePlayers.Select(gp => new GamePlayerDto(
-            gp.PlayerId,
-            playerNameById[gp.PlayerId],
-            gp.Score)).ToList());
+    var dto = ToGameDto(game);
 
     return Results.Created($"/api/games/{game.Id}", dto);
 });
@@ -345,7 +365,7 @@ static void SeedIfEmpty(AppDbContext db)
     db.Players.AddRange(players);
     db.SaveChanges();
 
-    var now = DateTime.UtcNow;
+    var now = ChinaTime.Now;
     var day = TimeSpan.FromDays(1);
     var seedGames = new List<(DateTime t, string? note, GameStatus status, int[] scores)>
     {
@@ -358,10 +378,10 @@ static void SeedIfEmpty(AppDbContext db)
 
     foreach (var (t, note, status, scores) in seedGames)
     {
-        db.Games.Add(new Game
-        {
-            PlayedAt = t,
-            Note = note,
+            db.Games.Add(new Game
+            {
+                PlayedAt = t.ToString("yyyy-MM-dd HH:mm:ss"),
+                Note = note,
             Status = status,
             Selected = true,
             CreatedAt = DateTime.UtcNow,
@@ -373,4 +393,16 @@ static void SeedIfEmpty(AppDbContext db)
         });
     }
     db.SaveChanges();
+}
+
+// 上海（中国）时区，统一时间以本地时区存储与显示
+internal static class ChinaTime
+{
+    private static readonly TimeZoneInfo Tz = GetTz();
+    private static TimeZoneInfo GetTz()
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById("Asia/Shanghai"); }
+        catch { return TimeZoneInfo.FindSystemTimeZoneById("China Standard Time"); }
+    }
+    public static DateTime Now => TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Tz);
 }
