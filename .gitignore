@@ -14,3 +14,6 @@ frontend/dist/
 .vs/
 .idea/
 *.user
+
+# Agent workspace
+.workbuddy/
