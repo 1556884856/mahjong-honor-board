@@ -1,0 +1,16 @@
+# 后端
+backend/bin/
+backend/obj/
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/publish/
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vs/
+.idea/
+*.user
