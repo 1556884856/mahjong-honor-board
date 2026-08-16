@@ -127,23 +127,25 @@ onMounted(() => {
     </header>
 
     <el-tabs v-model="currentTab" class="app-tabs">
-      <el-tab-pane label="记录对局" name="record">
+      <el-tab-pane label="记录对局" name="record" lazy>
         <RecordTab
           :players="players"
           @refresh-players="refreshPlayers"
           @game-created="refreshGames"
           @toast="showToast"
+          @confirm="showConfirm"
         />
       </el-tab-pane>
-      <el-tab-pane label="历史记录" name="history">
+      <el-tab-pane label="历史记录" name="history" lazy>
         <HistoryTab
           :games="games"
+          :players="players"
           @refresh-games="refreshGames"
           @toast="showToast"
           @confirm="showConfirm"
         />
       </el-tab-pane>
-      <el-tab-pane label="统计分析" name="stats">
+      <el-tab-pane label="统计分析" name="stats" lazy>
         <StatsTab
           :players="players"
           :games="games"

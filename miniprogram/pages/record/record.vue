@@ -15,6 +15,12 @@ const playedAtTime = ref('')
 const submitting = ref(false)
 const theme = ref(getTheme())
 
+// 编辑玩家
+const editPlayerVisible = ref(false)
+const editPlayerId = ref(null)
+const editPlayerName = ref('')
+const nameHistory = ref([])
+
 const themeLabel = computed(
   () => THEMES.find((t) => t.value === theme.value)?.label || '麻将绿'
 )
@@ -105,6 +111,35 @@ function removePlayer(player) {
   })
 }
 
+function openEditPlayer(p) {
+  editPlayerId.value = p.id
+  editPlayerName.value = p.name
+  nameHistory.value = []
+  editPlayerVisible.value = true
+  api
+    .getPlayerNameHistory(p.id)
+    .then((h) => {
+      nameHistory.value = h || []
+    })
+    .catch(() => {})
+}
+
+async function saveEditPlayer() {
+  const name = editPlayerName.value.trim()
+  if (!name) {
+    toast('请输入玩家名字', 'warning')
+    return
+  }
+  try {
+    await api.updatePlayer(editPlayerId.value, name)
+    editPlayerVisible.value = false
+    await loadPlayers()
+    toast('玩家已重命名', 'success')
+  } catch (e) {
+    toast(e.message, 'error')
+  }
+}
+
 function playerName(id) {
   return players.value.find((p) => p.id === id)?.name || ''
 }
@@ -129,7 +164,11 @@ async function submitGame() {
       return { playerId: id, score }
     })
 
-    const localDate = new Date(`${playedAtDate.value}T${playedAtTime.value}:00`)
+    // iOS 的 JavaScriptCore 不支持 new Date('YYYY-MM-DDTHH:mm:ss') 字符串，
+    // 会得到 Invalid Date 导致保存成当前时间。这里手动拆分构造。
+    const [yy, mo, dd] = playedAtDate.value.split('-').map(Number)
+    const [hh, mi] = playedAtTime.value.split(':').map(Number)
+    const localDate = new Date(yy, mo - 1, dd, hh, mi, 0)
     const playedAtStr = fmtLocal(localDate)
     await api.createGame({
       playedAt: playedAtStr,
@@ -177,7 +216,8 @@ async function submitGame() {
       <view v-if="players.length === 0" class="dim" style="margin-top: 16rpx">还没有玩家，先添加几个吧</view>
       <view v-else class="chips">
         <view v-for="p in players" :key="p.id" class="chip">
-          <text>{{ p.name }}</text>
+          <text class="chip-name">{{ p.name }}</text>
+          <text class="chip-edit" @tap="openEditPlayer(p)">✎</text>
           <text class="chip-close" @tap="removePlayer(p)">×</text>
         </view>
       </view>
@@ -252,6 +292,32 @@ async function submitGame() {
         </button>
       </block>
     </view>
+
+    <!-- 编辑玩家弹窗 -->
+    <view v-if="editPlayerVisible" class="popup-mask" @tap="editPlayerVisible = false">
+      <view class="popup-panel" @tap.stop>
+        <view class="popup-title">编辑玩家</view>
+        <input
+          v-model="editPlayerName"
+          class="input"
+          placeholder="玩家名字"
+          placeholder-class="dim"
+          confirm-type="done"
+          @confirm="saveEditPlayer"
+        />
+        <view v-if="nameHistory.length > 0" class="history-box">
+          <view class="history-title">改名历史</view>
+          <view v-for="h in nameHistory" :key="h.id" class="history-item">
+            <text class="history-names">{{ h.oldName }} → {{ h.newName }}</text>
+            <text class="history-time">{{ h.changedAt }}</text>
+          </view>
+        </view>
+        <view class="popup-actions">
+          <button class="btn btn-text" @tap="editPlayerVisible = false">取消</button>
+          <button class="btn btn-primary" @tap="saveEditPlayer">保存</button>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -304,10 +370,72 @@ async function submitGame() {
   padding: 8rpx 24rpx;
   font-size: 26rpx;
 }
+.chip-edit {
+  color: var(--text-secondary);
+  font-size: 28rpx;
+  padding: 0 4rpx;
+}
 .chip-close {
   color: var(--text-secondary);
   font-size: 30rpx;
   padding: 0 4rpx;
+}
+
+/* 编辑玩家弹窗 */
+.popup-mask {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+.popup-panel {
+  width: 600rpx;
+  background: var(--bg-card);
+  border-radius: 20rpx;
+  padding: 32rpx;
+}
+.popup-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  margin-bottom: 24rpx;
+}
+.history-box {
+  margin-top: 24rpx;
+  border-top: 1rpx dashed var(--border);
+  padding-top: 16rpx;
+  max-height: 360rpx;
+  overflow-y: auto;
+}
+.history-title {
+  font-size: 24rpx;
+  color: var(--text-secondary);
+  margin-bottom: 8rpx;
+}
+.history-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8rpx 0;
+  font-size: 26rpx;
+}
+.history-names {
+  color: var(--text-primary);
+}
+.history-time {
+  color: var(--text-secondary);
+  font-size: 22rpx;
+}
+.popup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 20rpx;
+  margin-top: 28rpx;
 }
 
 .select-label {

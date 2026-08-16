@@ -7,6 +7,10 @@ public record PlayerDto(int Id, string Name, DateTime CreatedAt);
 
 public record CreatePlayerRequest(string Name);
 
+public record UpdatePlayerRequest(string Name);
+
+public record PlayerNameHistoryDto(int Id, string OldName, string NewName, string ChangedAt);
+
 // ===== 对局 =====
 public record GamePlayerInput(int PlayerId, int Score);
 

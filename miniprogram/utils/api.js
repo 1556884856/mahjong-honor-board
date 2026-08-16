@@ -166,12 +166,15 @@ export const api = {
   // 玩家
   getPlayers: () => request('GET', '/players'),
   createPlayer: (name) => request('POST', '/players', { name }),
+  updatePlayer: (id, name) => request('PATCH', `/players/${id}`, { name }),
+  getPlayerNameHistory: (id) => request('GET', `/players/${id}/name-history`),
   deletePlayer: (id) => request('DELETE', `/players/${id}`),
 
   // 对局
   getGames: () => request('GET', '/games'),
   getGame: (id) => request('GET', `/games/${id}`),
   createGame: (payload) => request('POST', '/games', payload),
+  updateGame: (id, payload) => request('PUT', `/games/${id}`, payload),
   updateGameStatus: (id, status) => request('PATCH', `/games/${id}/status`, { status }),
   updateGameSelected: (id, selected) => request('PATCH', `/games/${id}/selected`, { selected }),
   deleteGame: (id) => request('DELETE', `/games/${id}`),

@@ -52,11 +52,11 @@ const filteredGames = computed(() => {
     if (useTimeRange.value) {
       const gt = toDate(g.playedAt)
       if (timeFrom.value) {
-        const f = new Date(timeFrom.value + 'T00:00:00')
+        const f = toDayStart(timeFrom.value)
         if (gt < f) return false
       }
       if (timeTo.value) {
-        const t = new Date(timeTo.value + 'T23:59:59')
+        const t = toDayEnd(timeTo.value)
         if (gt > t) return false
       }
     }
@@ -152,8 +152,21 @@ async function loadAll() {
   }
 }
 
+// 手动拆分字符串构造 Date，兼容 iOS JavaScriptCore（不支持 'YYYY-MM-DDTHH:mm:ss'）
 function toDate(s) {
-  return new Date(String(s).replace(' ', 'T'))
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(String(s))
+  if (!m) return new Date(0)
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])
+}
+function toDayStart(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s))
+  if (!m) return new Date(0)
+  return new Date(+m[1], +m[2] - 1, +m[3], 0, 0, 0)
+}
+function toDayEnd(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s))
+  if (!m) return new Date(0)
+  return new Date(+m[1], +m[2] - 1, +m[3], 23, 59, 59)
 }
 
 function formatTime(iso) {

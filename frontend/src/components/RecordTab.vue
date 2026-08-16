@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { api } from '../api.js'
 
 const props = defineProps({ players: { type: Array, default: () => [] } })
-const emit = defineEmits(['refresh-players', 'game-created', 'toast'])
+const emit = defineEmits(['refresh-players', 'game-created', 'toast', 'confirm'])
 
 const newPlayerName = ref('')
 const selectedPlayerIds = ref([])
@@ -11,6 +11,12 @@ const scores = ref({}) // { playerId: score }
 const note = ref('')
 const playedAt = ref(new Date())
 const submitting = ref(false)
+
+// 编辑玩家
+const editPlayerVisible = ref(false)
+const editPlayerId = ref(null)
+const editPlayerName = ref('')
+const nameHistory = ref([])
 
 const totalSum = computed(() => {
   return selectedPlayerIds.value.reduce((sum, id) => {
@@ -39,17 +45,51 @@ async function addPlayer() {
   }
 }
 
-async function removePlayer(player) {
+function removePlayer(player) {
+  emit('confirm', `删除玩家「${player.name}」？`, async () => {
+    try {
+      await api.deletePlayer(player.id)
+      const idx = selectedPlayerIds.value.indexOf(player.id)
+      if (idx >= 0) selectedPlayerIds.value.splice(idx, 1)
+      delete scores.value[player.id]
+      emit('refresh-players')
+      emit('toast', '玩家已删除', 'success')
+    } catch (e) {
+      emit('toast', e.message, 'error')
+    }
+  })
+}
+
+function openEditPlayer(p) {
+  editPlayerId.value = p.id
+  editPlayerName.value = p.name
+  nameHistory.value = []
+  editPlayerVisible.value = true
+  api.getPlayerNameHistory(p.id)
+    .then(h => { nameHistory.value = h || [] })
+    .catch(() => {})
+}
+
+async function saveEditPlayer() {
+  const name = editPlayerName.value.trim()
+  if (!name) return
   try {
-    await api.deletePlayer(player.id)
-    const idx = selectedPlayerIds.value.indexOf(player.id)
-    if (idx >= 0) selectedPlayerIds.value.splice(idx, 1)
-    delete scores.value[player.id]
+    await api.updatePlayer(editPlayerId.value, name)
+    editPlayerVisible.value = false
     emit('refresh-players')
-    emit('toast', '玩家已删除', 'success')
+    emit('toast', '玩家已重命名', 'success')
   } catch (e) {
     emit('toast', e.message, 'error')
   }
+}
+
+function formatTime(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(String(s))
+  if (!m) return ''
+  const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 function fmtLocal(d) {
@@ -114,14 +154,11 @@ async function submitGame() {
       </div>
       <div v-if="players.length === 0" class="dim">还没有玩家，先添加几个吧</div>
       <div v-else class="player-chips">
-        <el-tag
-          v-for="p in players"
-          :key="p.id"
-          closable
-          type="info"
-          effect="dark"
-          @close="removePlayer(p)"
-        >{{ p.name }}</el-tag>
+        <div v-for="p in players" :key="p.id" class="player-chip">
+          <span class="chip-name">{{ p.name }}</span>
+          <span class="chip-edit" title="编辑名字" @click="openEditPlayer(p)">✎</span>
+          <span class="chip-close" title="删除" @click="removePlayer(p)">×</span>
+        </div>
       </div>
     </el-card>
 
@@ -170,6 +207,25 @@ async function submitGame() {
         >记录对局</el-button>
       </template>
     </el-card>
+
+    <el-dialog v-model="editPlayerVisible" title="编辑玩家" width="400px" append-to-body>
+      <el-input
+        v-model="editPlayerName"
+        placeholder="玩家名字"
+        @keyup.enter="saveEditPlayer"
+      />
+      <div v-if="nameHistory.length > 0" class="name-history">
+        <div class="history-title">改名历史</div>
+        <div v-for="h in nameHistory" :key="h.id" class="history-item">
+          <span class="history-names">{{ h.oldName }} → {{ h.newName }}</span>
+          <span class="history-time">{{ formatTime(h.changedAt) }}</span>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="editPlayerVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveEditPlayer">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -177,6 +233,35 @@ async function submitGame() {
 .block-card { margin-bottom: 16px; }
 .add-player-row { display: flex; gap: 8px; }
 .player-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.player-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--el-fill-color-dark);
+  color: var(--el-text-color-primary);
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  padding: 4px 6px 4px 14px;
+  font-size: 13px;
+}
+.chip-name { line-height: 1.4; }
+.chip-edit, .chip-close {
+  cursor: pointer;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 50%;
+  color: var(--el-text-color-secondary);
+  transition: all 0.15s;
+}
+.chip-edit:hover { color: var(--el-color-primary); background: var(--el-fill-color-light); }
+.chip-close:hover { color: var(--el-color-danger); background: var(--el-fill-color-light); }
+.name-history { margin-top: 14px; border-top: 1px dashed var(--el-border-color); padding-top: 10px; }
+.history-title { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 6px; }
+.history-item { display: flex; justify-content: space-between; align-items: center; font-size: 13px; padding: 3px 0; }
+.history-names { color: var(--el-text-color-primary); }
+.history-time { color: var(--el-text-color-secondary); font-size: 12px; }
 .dim { color: var(--el-text-color-secondary); font-size: 14px; }
 .select-label { font-size: 14px; margin-bottom: 8px; }
 .player-select { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }

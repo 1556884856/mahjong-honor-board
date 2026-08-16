@@ -11,6 +11,7 @@ public class AppDbContext : DbContext
     public DbSet<Game> Games => Set<Game>();
     public DbSet<GamePlayer> GamePlayers => Set<GamePlayer>();
     public DbSet<WechatUser> WechatUsers => Set<WechatUser>();
+    public DbSet<PlayerNameHistory> PlayerNameHistories => Set<PlayerNameHistory>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -37,6 +38,16 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<WechatUser>(e =>
         {
             e.HasIndex(w => w.OpenId).IsUnique();
+        });
+
+        modelBuilder.Entity<PlayerNameHistory>(e =>
+        {
+            e.HasIndex(h => h.PlayerId);
+
+            e.HasOne(h => h.Player)
+                .WithMany()
+                .HasForeignKey(h => h.PlayerId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

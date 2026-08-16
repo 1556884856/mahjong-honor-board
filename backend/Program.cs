@@ -118,6 +118,19 @@ using (var scope = app.Services.CreateScope())
         CREATE UNIQUE INDEX IF NOT EXISTS "IX_WechatUsers_OpenId" ON "WechatUsers" ("OpenId");
         """);
 
+    // 已有库不会自动补建新表，这里显式建 PlayerNameHistories（玩家改名历史子表）
+    db.Database.ExecuteSqlRaw("""
+        CREATE TABLE IF NOT EXISTS "PlayerNameHistories" (
+            "Id" INTEGER NOT NULL CONSTRAINT "PK_PlayerNameHistories" PRIMARY KEY AUTOINCREMENT,
+            "PlayerId" INTEGER NOT NULL,
+            "OldName" TEXT NOT NULL,
+            "NewName" TEXT NOT NULL,
+            "ChangedAt" TEXT NOT NULL,
+            CONSTRAINT "FK_PlayerNameHistories_Players_PlayerId" FOREIGN KEY ("PlayerId") REFERENCES "Players" ("Id") ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS "IX_PlayerNameHistories_PlayerId" ON "PlayerNameHistories" ("PlayerId");
+        """);
+
     // 一次性迁移：旧数据按 UTC 存储，统一转为上海时区 yyyy-MM-dd HH:mm:ss 字符串
     var conn = db.Database.GetDbConnection();
     if (conn.State != ConnectionState.Open) conn.Open();
@@ -218,6 +231,61 @@ app.MapPost("/api/players", async (AppDbContext db, CreatePlayerRequest req) =>
         new PlayerDto(player.Id, player.Name, player.CreatedAt));
 });
 
+// 重命名玩家（同时写入改名历史）
+app.MapPatch("/api/players/{id:int}", async (AppDbContext db, int id, UpdatePlayerRequest req) =>
+{
+    var player = await db.Players.FindAsync(id);
+    if (player is null) return Results.NotFound(new { message = "玩家不存在" });
+
+    var name = req.Name?.Trim() ?? "";
+    if (string.IsNullOrEmpty(name))
+        return Results.BadRequest(new { message = "玩家名不能为空" });
+    if (name.Length > MaxPlayerNameLength)
+        return Results.BadRequest(new { message = $"玩家名不能超过{MaxPlayerNameLength}个字符" });
+
+    // 名字未变化，直接返回
+    if (name == player.Name)
+        return Results.Ok(new PlayerDto(player.Id, player.Name, player.CreatedAt));
+
+    var exists = await db.Players.AnyAsync(p => p.Name == name && p.Id != id);
+    if (exists)
+        return Results.Conflict(new { message = "玩家已存在" });
+
+    var oldName = player.Name;
+    player.Name = name;
+
+    db.PlayerNameHistories.Add(new PlayerNameHistory
+    {
+        PlayerId = player.Id,
+        OldName = oldName,
+        NewName = name,
+        ChangedAt = DateTime.UtcNow
+    });
+
+    try
+    {
+        await db.SaveChangesAsync();
+    }
+    catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+    {
+        return Results.Conflict(new { message = "玩家已存在" });
+    }
+    return Results.Ok(new PlayerDto(player.Id, player.Name, player.CreatedAt));
+});
+
+// 玩家改名历史（按时间倒序）
+app.MapGet("/api/players/{id:int}/name-history", async (AppDbContext db, int id) =>
+{
+    var history = await db.PlayerNameHistories
+        .AsNoTracking()
+        .Where(h => h.PlayerId == id)
+        .OrderByDescending(h => h.ChangedAt)
+        .ToListAsync();
+
+    return Results.Ok(history.Select(h => new PlayerNameHistoryDto(
+        h.Id, h.OldName, h.NewName, ChinaTime.ToChinaString(h.ChangedAt))));
+});
+
 app.MapDelete("/api/players/{id:int}", async (AppDbContext db, int id) =>
 {
     var player = await db.Players.FindAsync(id);
@@ -304,6 +372,89 @@ app.MapPost("/api/games", async (AppDbContext db, CreateGameRequest req) =>
     var dto = ToGameDto(game);
 
     return Results.Created($"/api/games/{game.Id}", dto);
+});
+
+// 编辑对局（仅正常状态可编辑）
+app.MapPut("/api/games/{id:int}", async (AppDbContext db, int id, CreateGameRequest req) =>
+{
+    var game = await db.Games
+        .Include(g => g.GamePlayers)
+        .FirstOrDefaultAsync(g => g.Id == id);
+    if (game is null) return Results.NotFound(new { message = "对局不存在" });
+
+    if (game.Status != GameStatus.Active)
+        return Results.BadRequest(new { message = "已作废的对局不能编辑，请先恢复" });
+
+    if (req.Players is null || req.Players.Count < 2)
+        return Results.BadRequest(new { message = "至少需要2名玩家" });
+    if (req.Players.Count > MaxPlayersPerGame)
+        return Results.BadRequest(new { message = $"最多支持{MaxPlayersPerGame}名玩家" });
+    if (req.Players.Any(p => p.Score < -MaxScore || p.Score > MaxScore))
+        return Results.BadRequest(new { message = "得分超出允许范围" });
+    if ((req.Note?.Length ?? 0) > MaxGameNoteLength)
+        return Results.BadRequest(new { message = $"备注不能超过{MaxGameNoteLength}个字符" });
+
+    var playerIds = req.Players.Select(p => p.PlayerId).Distinct().ToList();
+    if (playerIds.Count != req.Players.Count)
+        return Results.BadRequest(new { message = "玩家不能重复" });
+
+    var players = await db.Players.Where(p => playerIds.Contains(p.Id)).ToListAsync();
+    if (players.Count != playerIds.Count)
+        return Results.BadRequest(new { message = "存在无效的玩家" });
+
+    var playerNameById = players.ToDictionary(p => p.Id, p => p.Name);
+
+    var playedAtStr = (req.PlayedAt ?? "").Trim();
+    if (!DateTime.TryParseExact(playedAtStr, "yyyy-MM-dd HH:mm:ss",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var playedAt))
+    {
+        playedAt = ChinaTime.Now;
+    }
+
+    game.PlayedAt = playedAt.ToString("yyyy-MM-dd HH:mm:ss");
+    game.Note = req.Note;
+
+    // 更新已有玩家得分，删除被移除的玩家，再添加新增玩家。
+    // 这样保留已有 GamePlayer 主键，避免同局重建时触发 (GameId, PlayerId) 唯一索引冲突。
+    var existingGamePlayers = game.GamePlayers.ToList();
+    var inputByPlayerId = req.Players.ToDictionary(p => p.PlayerId, p => p.Score);
+
+    foreach (var gp in existingGamePlayers)
+    {
+        if (inputByPlayerId.TryGetValue(gp.PlayerId, out var score))
+        {
+            gp.Score = score;
+        }
+        else
+        {
+            db.GamePlayers.Remove(gp);
+        }
+    }
+
+    foreach (var input in req.Players)
+    {
+        if (!existingGamePlayers.Any(gp => gp.PlayerId == input.PlayerId))
+        {
+            game.GamePlayers.Add(new GamePlayer
+            {
+                PlayerId = input.PlayerId,
+                Score = input.Score
+            });
+        }
+    }
+
+    await db.SaveChangesAsync();
+
+    var dto = new GameDto(
+        game.Id,
+        game.PlayedAt,
+        game.Note,
+        game.Status,
+        game.Selected,
+        req.Players.Select(p => new GamePlayerDto(p.PlayerId, playerNameById[p.PlayerId], p.Score)).ToList()
+    );
+    return Results.Ok(dto);
 });
 
 // 作废 / 恢复
@@ -405,4 +556,7 @@ internal static class ChinaTime
         catch { return TimeZoneInfo.FindSystemTimeZoneById("China Standard Time"); }
     }
     public static DateTime Now => TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Tz);
+
+    public static string ToChinaString(DateTime utc) =>
+        TimeZoneInfo.ConvertTimeFromUtc(utc, Tz).ToString("yyyy-MM-dd HH:mm:ss");
 }

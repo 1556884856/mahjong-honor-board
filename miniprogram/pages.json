@@ -13,6 +13,12 @@
       }
     },
     {
+      "path": "pages/history/edit",
+      "style": {
+        "navigationBarTitleText": "编辑对局"
+      }
+    },
+    {
       "path": "pages/stats/stats",
       "style": {
         "navigationBarTitleText": "统计分析"

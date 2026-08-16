@@ -17,8 +17,11 @@ const themeLabel = computed(
   () => THEMES.find((t) => t.value === theme.value)?.label || '麻将绿'
 )
 
+// 手动拆分字符串构造 Date，兼容 iOS JavaScriptCore（不支持 'YYYY-MM-DDTHH:mm:ss'）
 function toDate(s) {
-  return new Date(String(s).replace(' ', 'T'))
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(String(s))
+  if (!m) return new Date(0)
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])
 }
 
 const sortedGames = computed(() =>
@@ -130,6 +133,10 @@ function permanentDelete(game) {
     }
   })
 }
+
+function editGame(game) {
+  uni.navigateTo({ url: '/pages/history/edit?id=' + game.id })
+}
 </script>
 
 <template>
@@ -192,6 +199,7 @@ function permanentDelete(game) {
               <button class="btn btn-text btn-text-danger" @tap="permanentDelete(g)">永久删除</button>
             </block>
             <block v-else>
+              <button class="btn btn-text" @tap="editGame(g)">编辑</button>
               <button class="btn btn-text btn-text-warning" @tap="voidGame(g)">作废</button>
             </block>
           </view>
